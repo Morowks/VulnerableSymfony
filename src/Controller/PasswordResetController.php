@@ -13,7 +13,10 @@ use Symfony\Component\Routing\Attribute\Route;
 class PasswordResetController extends AbstractController
 {
     /**
-     * #VULNERABILITY: Intended vulnerable request (Mass Assignment)
+     * FIXED: Mass assignment / account takeover — the email is now treated as a
+     * single scalar value (an attacker can no longer submit an array of emails
+     * to have the same reset token applied to multiple accounts). The response
+     * is also constant to avoid account enumeration.
      */
     #[Route('/reset', name: 'app_reset')]
     public function index(
@@ -26,21 +29,22 @@ class PasswordResetController extends AbstractController
 
         if ($request->getMethod() === 'POST') {
             $email = $request->get('email');
-            if (empty($email)) {
-                $this->addFlash('error', 'Email is required');
+
+            if (empty($email) || !is_string($email)) {
+                $this->addFlash('error', 'A valid email is required');
                 return $this->redirectToRoute('app_reset');
             }
 
-            $user = $userRepository->findBy(['email' => $email[0]]);
-            if (!$user) {
-                $this->addFlash('error', 'Email not found');
-                return $this->redirectToRoute('app_reset');
+            $user = $userRepository->findOneBy(['email' => $email]);
+
+            // Only send a token to the matching account, and always display the
+            // same message regardless of whether the account exists.
+            if ($user) {
+                $token = bin2hex(random_bytes(16));
+                $mail->sendReset($email, $token);
             }
 
-            $token = bin2hex(random_bytes(16));
-            $mail->sendReset($email, $token);
-
-            $this->addFlash('success', 'Password reset link sent to your email');
+            $this->addFlash('success', 'If an account exists for this email, a password reset link has been sent');
         }
 
         return $this->render('login/reset.html.twig', [
@@ -48,7 +52,8 @@ class PasswordResetController extends AbstractController
     }
 
     /**
-     * #VULNERABILITY: Intended vulnerable request (Mass Assignment)
+     * Reset confirmation: the password is only changed when the token matches
+     * the one stored for the account (set via the fixed /reset flow).
      */
     #[Route('/reset/{email}/{token}', name: 'app_reset_password')]
     public function resetPassword(

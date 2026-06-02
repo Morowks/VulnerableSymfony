@@ -13,7 +13,8 @@ use Symfony\Component\Routing\Attribute\Route;
 class LoginController extends AbstractController
 {
     /**
-     * #VULNERABILITY: Intended vulnerable request (SQL Injection)
+     * FIXED: SQL Injection — UserRepository::getUserLogin() now uses a fully
+     * parameterized query.
      */
     #[Route('/login', name: 'app_login', methods: ['GET', 'POST'])]
     public function index(Request $request, UserRepository $repository, Security $security): Response
@@ -53,7 +54,10 @@ class LoginController extends AbstractController
     }
 
     /**
-     * #VULNERABILITY: User enumeration
+     * FIXED: User enumeration — the response no longer reveals whether an email
+     * or a username already exists. Validation errors (format / password) keep
+     * specific messages, but any "already in use" case returns the same generic
+     * message so an attacker cannot distinguish existing accounts.
      */
     #[Route('/register', name: 'app_register', methods: ['GET', 'POST'])]
     public function register(Request $request, UserRepository $userRepository): Response
@@ -66,23 +70,9 @@ class LoginController extends AbstractController
             $password = $request->get('password');
             $confirmPassword = $request->get('confirmPassword');
 
-            // Check if email is valid and not already in use
+            // Check if email is valid
             if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
                 $this->addFlash('error', 'Email is not valid');
-                return $this->redirectToRoute('app_register');
-            }
-
-            // Check if email is not already in use
-            $user = $userRepository->findOneBy(['email' => $email]);
-            if ($user) {
-                $this->addFlash('error', 'Email is already in use');
-                return $this->redirectToRoute('app_register');
-            }
-
-            // Check if username is not already in use
-            $user = $userRepository->findOneBy(['username' => $username]);
-            if ($user) {
-                $this->addFlash('error', 'Username is already in use');
                 return $this->redirectToRoute('app_register');
             }
 
@@ -95,6 +85,16 @@ class LoginController extends AbstractController
             // Check if password and confirm password are the same
             if ($password !== $confirmPassword) {
                 $this->addFlash('error', 'Password and confirm password are not the same');
+                return $this->redirectToRoute('app_register');
+            }
+
+            // Check if email or username is already in use, but DO NOT disclose
+            // which one (prevents account enumeration).
+            $existing = $userRepository->findOneBy(['email' => $email])
+                ?? $userRepository->findOneBy(['username' => $username]);
+
+            if ($existing) {
+                $this->addFlash('error', 'Registration could not be completed. Please check your details and try again.');
                 return $this->redirectToRoute('app_register');
             }
 

@@ -47,9 +47,13 @@ RUN chmod +x /app/bin/script
 RUN chown www-data:www-data /app/bin/console
 
 # Cron Job
-RUN echo "*  *    * * *   root    cd /app && bash bin/script" > /etc/cron.d/app
+# FIXED: Privilege escalation — the job now runs as the unprivileged "www-data"
+# user instead of root, and the script/binaries it executes stay owned by root
+# (not writable by the web user) so a compromised web process cannot escalate to
+# root by tampering with the cron script.
+RUN echo "*  *    * * *   www-data    cd /app && bash bin/script" > /etc/cron.d/app
 RUN chmod 0644 /etc/cron.d/app
-RUN crontab /etc/cron.d/app
+RUN chown root:root /app/bin/script && chmod 0755 /app/bin/script
 
 # Set entrypoint
 COPY docker/entrypoint.sh /entrypoint.sh

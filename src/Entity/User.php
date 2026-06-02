@@ -51,12 +51,18 @@ class User implements UserInterface, PasswordAuthenticatedUserInterface
     private ?string $reset = null;
 
     /**
-     * #VULNERABILITY: Intended vulnerable request (Mass Assignment)
+     * FIXED: Mass assignment — only a strict whitelist of non-sensitive
+     * properties can be hydrated from an array. Sensitive fields (roles,
+     * isAdmin, password, reset, email) are intentionally excluded.
      */
     public function fromArray(array $data): void
     {
-        foreach ($data as $key => $value) {
-            $this->$key = $value;
+        $allowed = ['username', 'firstname', 'lastname', 'aboutMe'];
+
+        foreach ($allowed as $key) {
+            if (array_key_exists($key, $data)) {
+                $this->$key = $data[$key];
+            }
         }
     }
 

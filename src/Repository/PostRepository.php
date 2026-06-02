@@ -57,14 +57,19 @@ class PostRepository extends ServiceEntityRepository
     }
 
     /**
-     * #VULNERABILITY: Intended vulnerable request (SQL Injection)
+     * FIXED: SQL Injection — the search term is bound as a parameter and the
+     * LIKE wildcards are added to the bound value, so the input can no longer
+     * break out of the string literal.
      */
     public function search(string $query): array|false
     {
-        $rawSql = "SELECT * FROM post WHERE content LIKE '%" . $query . "%' OR title LIKE '%" . $query . "%' ORDER BY date DESC";
+        $sql = 'SELECT * FROM post WHERE content LIKE :query OR title LIKE :query ORDER BY date DESC';
         $conn = $this->getEntityManager()->getConnection();
-        $stmt = $conn->prepare($rawSql);
-        return $stmt->executeQuery([])->fetchAllAssociative();
+        $stmt = $conn->prepare($sql);
+
+        return $stmt->executeQuery([
+            'query' => '%' . $query . '%',
+        ])->fetchAllAssociative();
     }
 
     public function countByUser(User $user): int

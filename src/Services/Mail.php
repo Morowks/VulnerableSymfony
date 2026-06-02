@@ -18,26 +18,31 @@ class Mail
         private EntityManagerInterface $entityManager,
     ) {}
 
-    public function sendReset(array $emails, string $token): void
+    /**
+     * FIXED: account takeover — the reset token is only ever generated and
+     * stored for the single, verified email address (no array of recipients).
+     */
+    public function sendReset(string $emailAddress, string $token): void
     {
-        foreach ($emails as $emailAddress) {
-            $url = $this->router->generate('app_reset_password', [
-                'email' => $emailAddress,
-                'token' => $token
-            ], UrlGeneratorInterface::ABSOLUTE_URL);
-
-            $email = (new Email())
-                ->from($this->sender)
-                ->to($emailAddress)
-                ->subject('Reset your password')
-                ->html('<p>Click <a href="'.$url.'">here</a> to reset your password</p>');
-
-            $this->mailer->send($email);
-
-            $user = $this->userRepository->findOneBy(['email' => $emailAddress]);
-            $user->setReset($token);
-            $this->entityManager->flush();
+        $user = $this->userRepository->findOneBy(['email' => $emailAddress]);
+        if (!$user) {
+            return;
         }
 
+        $url = $this->router->generate('app_reset_password', [
+            'email' => $emailAddress,
+            'token' => $token
+        ], UrlGeneratorInterface::ABSOLUTE_URL);
+
+        $email = (new Email())
+            ->from($this->sender)
+            ->to($emailAddress)
+            ->subject('Reset your password')
+            ->html('<p>Click <a href="'.$url.'">here</a> to reset your password</p>');
+
+        $this->mailer->send($email);
+
+        $user->setReset($token);
+        $this->entityManager->flush();
     }
 }

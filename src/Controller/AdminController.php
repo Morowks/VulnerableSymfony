@@ -23,11 +23,15 @@ class AdminController extends AbstractController
     }
 
     /**
-     * #VULNERABILITY: Intended vulnerable request (Missing right control)
+     * FIXED: Missing right control / privilege escalation — this endpoint lives
+     * under "/user" (which only requires ROLE_USER), so it was reachable by any
+     * authenticated user. Changing roles is now explicitly restricted to admins.
      */
     #[Route('/user/role/{user}', name: 'app_admin_role', methods: ['POST'])]
     public function changeRole(Request $request, UserRepository $userRepository, User $user): Response
     {
+        $this->denyAccessUnlessGranted('ROLE_ADMIN');
+
         $user = $userRepository->find($user);
         $user->setAdmin($request->get('role') === '1');
         $userRepository->save($user, true);
@@ -36,6 +40,10 @@ class AdminController extends AbstractController
         return $this->redirectToRoute('app_admin');
     }
 
+    /**
+     * FIXED: Missing right control — deleting a user is restricted to admins
+     * (in addition to the firewall rule on "/admin").
+     */
     #[Route('/admin/delete/{user}', name: 'app_admin_delete')]
     public function deleteUser(
         EntityManagerInterface $entityManager,
@@ -44,6 +52,8 @@ class AdminController extends AbstractController
         User                   $user
     ): Response
     {
+        $this->denyAccessUnlessGranted('ROLE_ADMIN');
+
         $postCount = $postRepository->countByUser($user);
         $commentCount = $commentRepository->countByUser($user);
 
